@@ -403,7 +403,9 @@ io.on('connection', (socket) => {
     // If all players are CPU (shouldn't happen) or all already submitted
     const allDone = room.players.every(p => p.submitted);
     if (allDone) {
-      setTimeout(() => scoreAndBroadcast(room), 500);
+      // Wait long enough for human clients to receive & animate their cards
+      // 13 cards * 55ms deal animation + 500ms buffer = 1215ms
+      setTimeout(() => scoreAndBroadcast(room), 1500);
     }
 
     console.log(`Room ${room.code}: deal ${room.currentDeal} dealt`);
