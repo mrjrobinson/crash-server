@@ -215,10 +215,9 @@ function playDeal(room) {
   for (let round = 0; round < 4; round++) {
     const result = scoreRound(room, round);
     let outcome = '';
-    const carryBefore = carry; // capture BEFORE modifying
     if (result.winner) {
       const wp = room.players.find(p => p.id === result.winner.playerId);
-      const gained = 1 + carryBefore;
+      const gained = 1 + carry;
       wp.score += gained;
       carry = 0;
       roundWinners.push(wp.name);
@@ -228,14 +227,14 @@ function playDeal(room) {
         gameWinner = wp;
         gameMsg = `${wp.name} reaches 11 — wins on round ${round+1} of deal ${room.currentDeal}!`;
         winningRound = round + 1;
-        roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore, winningRound: true });
+        roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore: carry, winningRound: true });
         break;
       }
     } else {
       carry += 1;
       outcome = `No winner — carry now ${carry}`;
     }
-    roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore, winningRound: false });
+    roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore: carry, winningRound: false });
   }
 
   room.carryPoints = gameWinner ? 0 : carry;
@@ -255,47 +254,6 @@ function playDeal(room) {
   if (gameWinner) { gameWinner.score = Math.min(gameWinner.score, 11); room.gameOver = true; }
 
   return { roundResults, gameWinner, gameMsg, winningRound };
-}
-
-// ── CPU hand arrangement (server-side for CPU players) ──
-function cpuOptimise(cards) {
-  const idxs = cards.map((_,i) => i);
-  function combos(arr, size) {
-    const out = [];
-    function walk(start, combo) {
-      if (combo.length === size) { out.push(combo.slice()); return; }
-      for (let i = start; i < arr.length; i++) { combo.push(arr[i]); walk(i+1, combo); combo.pop(); }
-    }
-    walk(0, []); return out;
-  }
-  const scored = [...combos(idxs,3), ...combos(idxs,2)].map(combo => {
-    const hand = combo.map(i => cards[i]);
-    const ev = evaluateHand(hand);
-    return { combo, hand, ev, score: ev ? ev.rankGroup*10000 - ev.rankingIndex : -1 };
-  }).filter(x => x.score >= 0).sort((a,b) => b.score - a.score);
-  const used = new Set(), picked = [];
-  for (const item of scored) {
-    if (picked.length >= 4) break;
-    if (item.combo.some(i => used.has(i))) continue;
-    item.combo.forEach(i => used.add(i));
-    picked.push(item.hand);
-  }
-  while (picked.length < 4) picked.push([]);
-  return picked.sort((a,b) => compareHands(evaluateHand(b), evaluateHand(a)));
-}
-
-function scoreAndBroadcast(room) {
-  room.phase = 'revealing';
-  const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
-  io.to(room.code).emit('room_update', roomSummary(room));
-  io.to(room.code).emit('deal_results', {
-    roundResults, gameWinner: gameWinner ? { id: gameWinner.id, name: gameWinner.name, score: gameWinner.score } : null,
-    gameMsg, winningRound,
-    scores: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
-    allHands: room.players.map(p => ({ id: p.id, name: p.name, hands: p.hands }))
-  });
-  room.phase = room.gameOver ? 'gameover' : 'between_deals';
-  if (!room.gameOver) room.currentDeal += 1;
 }
 
 // ── Socket.io logic ──
@@ -334,21 +292,9 @@ io.on('connection', (socket) => {
   });
 
   // ── Host starts game ──
-  socket.on('start_game', ({ cpuCount = 0 } = {}) => {
+  socket.on('start_game', () => {
     const room = rooms[socket.data.roomCode];
     if (!room || room.hostId !== socket.id) return;
-    const humanCount = room.players.length;
-    if (humanCount < 1) { socket.emit('error', { msg: 'Need at least 1 player to start.' }); return; }
-    const totalNeeded = Math.min(cpuCount, 4 - humanCount);
-    // Add CPU players to fill slots
-    for (let i = 0; i < totalNeeded; i++) {
-      room.players.push({
-        id: `cpu_${i+1}`,
-        name: `CPU ${i+1}`,
-        score: 0, ready: true, submitted: false, connected: true,
-        hands: [[],[],[],[]], dealCards: [], isCpu: true
-      });
-    }
     if (room.players.length < 2) { socket.emit('error', { msg: 'Need at least 2 players to start.' }); return; }
     dealCards(room);
   });
@@ -384,30 +330,15 @@ io.on('connection', (socket) => {
 
     io.to(room.code).emit('room_update', roomSummary(room));
 
-    // Send each human player their own cards privately
-    // CPU players auto-arrange immediately
+    // Send each player their own cards privately
     room.players.forEach(p => {
-      if (p.isCpu) {
-        // CPU auto-arranges and submits
-        p.hands = cpuOptimise(p.dealCards);
-        p.submitted = true;
-      } else {
-        io.to(p.id).emit('your_cards', {
-          dealCards: p.dealCards,
-          dealNumber: room.currentDeal,
-          carryPoints: room.carryPoints,
-          fourOfAKindValue: p.fourOfAKindValue || null
-        });
-      }
+      io.to(p.id).emit('your_cards', {
+        dealCards: p.dealCards,
+        dealNumber: room.currentDeal,
+        carryPoints: room.carryPoints,
+        fourOfAKindValue: p.fourOfAKindValue || null
+      });
     });
-
-    // If all players are CPU (shouldn't happen) or all already submitted
-    const allDone = room.players.every(p => p.submitted);
-    if (allDone) {
-      // Wait long enough for human clients to receive & animate their cards
-      // 13 cards * 55ms deal animation + 500ms buffer = 1215ms
-      setTimeout(() => scoreAndBroadcast(room), 1500);
-    }
 
     console.log(`Room ${room.code}: deal ${room.currentDeal} dealt`);
   }
@@ -444,17 +375,35 @@ io.on('connection', (socket) => {
     player.submitted = true;
 
     // Notify everyone of submission progress
-    const humanPlayers = room.players.filter(p => !p.isCpu);
     const submittedCount = room.players.filter(p => p.submitted).length;
     io.to(room.code).emit('submission_update', {
       submittedCount,
-      totalPlayers: humanPlayers.length,
+      totalPlayers: room.players.length,
       submittedNames: room.players.filter(p => p.submitted).map(p => p.name)
     });
 
     // If all submitted, score the deal
-    if (room.players.every(p => p.submitted)) {
-      scoreAndBroadcast(room);
+    if (submittedCount === room.players.length) {
+      room.phase = 'revealing';
+      const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
+
+      // Update scores in room
+      io.to(room.code).emit('room_update', roomSummary(room));
+      io.to(room.code).emit('deal_results', {
+        roundResults,
+        gameWinner: gameWinner ? { id: gameWinner.id, name: gameWinner.name, score: gameWinner.score } : null,
+        gameMsg,
+        winningRound,
+        scores: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
+        allHands: room.players.map(p => ({ id: p.id, name: p.name, hands: p.hands }))
+      });
+
+      if (room.gameOver) {
+        room.phase = 'gameover';
+      } else {
+        room.phase = 'between_deals';
+        room.currentDeal += 1;
+      }
     }
 
     console.log(`Room ${room.code}: ${player.name} submitted (${submittedCount}/${room.players.length})`);
@@ -484,12 +433,11 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.id === socket.id);
     if (player) {
       player.connected = false;
-      player.disconnectedAt = Date.now();
       console.log(`${player.name} disconnected from room ${code}`);
-      io.to(code).emit('player_disconnected', { name: player.name, code });
+      io.to(code).emit('player_disconnected', { name: player.name });
       io.to(code).emit('room_update', roomSummary(room));
     }
-    // Clean up empty rooms after 30 minutes
+    // Clean up empty rooms after 10 minutes
     const allGone = room.players.every(p => !p.connected);
     if (allGone) {
       setTimeout(() => {
@@ -497,40 +445,26 @@ io.on('connection', (socket) => {
           delete rooms[code];
           console.log(`Room ${code} cleaned up`);
         }
-      }, 30 * 60 * 1000);
+      }, 10 * 60 * 1000);
     }
   });
 
-  // ── Rejoin room after disconnect ──
+  // ── Reconnect ──
   socket.on('rejoin_room', ({ code, name }) => {
     const room = rooms[code];
-    if (!room) { socket.emit('rejoin_failed', { msg: 'Room no longer exists. Ask the host to start a new game.' }); return; }
-    // Find their slot by name (disconnected or even still marked connected if they refreshed)
-    const player = room.players.find(p => p.name === name && !p.isCpu);
-    if (!player) { socket.emit('rejoin_failed', { msg: `Could not find a player named "${name}" in room ${code}.` }); return; }
-    // Update their socket id to the new connection
+    if (!room) { socket.emit('error', { msg: 'Room no longer exists.' }); return; }
+    const player = room.players.find(p => p.name === name && !p.connected);
+    if (!player) { socket.emit('error', { msg: 'Could not find your player slot.' }); return; }
     player.id = socket.id;
     player.connected = true;
-    player.disconnectedAt = null;
     socket.join(code);
     socket.data.roomCode = code;
-    socket.emit('rejoin_success', {
-      code,
-      phase: room.phase,
-      isHost: room.hostId === player.id
-    });
+    socket.emit('room_joined', { code, rejoin: true });
     io.to(code).emit('room_update', roomSummary(room));
-    io.to(code).emit('player_rejoined', { name: player.name });
-    // Re-send their cards if mid-deal
-    if ((room.phase === 'building') && !player.submitted) {
-      socket.emit('your_cards', {
-        dealCards: player.dealCards,
-        dealNumber: room.currentDeal,
-        carryPoints: room.carryPoints,
-        fourOfAKindValue: player.fourOfAKindValue || null
-      });
+    if (room.phase === 'building' && !player.submitted) {
+      socket.emit('your_cards', { dealCards: player.dealCards, dealNumber: room.currentDeal, carryPoints: room.carryPoints, fourOfAKindValue: player.fourOfAKindValue || null });
     }
-    console.log(`${name} rejoined room ${code} (phase: ${room.phase})`);
+    console.log(`${name} rejoined room ${code}`);
   });
 });
 
