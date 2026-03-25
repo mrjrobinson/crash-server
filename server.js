@@ -611,6 +611,16 @@ io.on('connection', (socket) => {
     io.to('sb_' + code).emit('sb_update', sbSummary(room));
   });
 
+  // Add a manual player (scorer only)
+  socket.on('sb_add_player', ({ name }) => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room || room.scorerId !== socket.id) return;
+    const newId = Math.max(...room.players.map(p => p.id)) + 1;
+    room.players.push({ id: newId, name: name || `Player ${room.players.length+1}`, score: 0, active: true });
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+  });
+
   // ── Disconnect from SB ──
   socket.on('disconnect', () => {
     const code = socket.data.sbCode;
