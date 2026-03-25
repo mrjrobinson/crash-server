@@ -318,6 +318,19 @@ function scoreAndBroadcast(room) {
   const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
   io.to(room.code).emit('room_update', roomSummary(room));
   broadcastActiveGames(); // update active count
+  // Auto-mark CPU players as ready for next game
+  if (room.gameOver) {
+    if (!room.readyMap) room.readyMap = {};
+    room.players.filter(p => p.isCpu).forEach(p => {
+      room.readyMap[p.name] = true;
+    });
+    if (Object.keys(room.readyMap).length > 0) {
+      // Broadcast after a short delay so clients receive deal_results first
+      setTimeout(() => {
+        io.to(room.code).emit('ready_update', { readyMap: room.readyMap });
+      }, 500);
+    }
+  }
   io.to(room.code).emit('deal_results', {
     roundResults, gameWinner: gameWinner ? { id: gameWinner.id, name: gameWinner.name, score: gameWinner.score } : null,
     gameMsg, winningRound,
