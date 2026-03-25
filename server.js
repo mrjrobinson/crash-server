@@ -504,6 +504,15 @@ io.on('connection', (socket) => {
     console.log(`Room ${room.code}: ${player.name} submitted (${submittedCount}/${room.players.length})`);
   });
 
+  // ── Celebrate selfie relay ──
+  socket.on('celebrate_selfie', ({ name, image }) => {
+    const room = rooms[socket.data.roomCode];
+    if (!room) return;
+    // Relay to all OTHER players in the room (not back to sender)
+    socket.to(room.code).emit('celebrate_selfie', { name, image });
+    console.log(`Selfie from ${name} relayed to room ${room.code}`);
+  });
+
   // ── Six pairs response ──
   socket.on('six_pairs_response', ({ redeal }) => {
     const room = rooms[socket.data.roomCode];
