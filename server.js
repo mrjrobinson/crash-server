@@ -24,6 +24,11 @@ app.get('/', (req, res) => {
 // ── Room state ──
 // rooms[code] = { code, players, state, phase, hostId }
 const rooms = {};
+
+function broadcastActiveGames() {
+  const count = Object.values(rooms).filter(r => r.phase !== 'waiting').length;
+  io.emit('active_games', { count });
+}
 const sbRooms = {}; // live scoreboard sessions
 
 // ── Scoreboard helpers ──
@@ -312,6 +317,7 @@ function scoreAndBroadcast(room) {
   room.phase = 'revealing';
   const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
   io.to(room.code).emit('room_update', roomSummary(room));
+  broadcastActiveGames(); // update active count
   io.to(room.code).emit('deal_results', {
     roundResults, gameWinner: gameWinner ? { id: gameWinner.id, name: gameWinner.name, score: gameWinner.score } : null,
     gameMsg, winningRound,
@@ -324,6 +330,9 @@ function scoreAndBroadcast(room) {
 
 // ── Socket.io logic ──
 io.on('connection', (socket) => {
+  // Send current active game count to newly connected client
+  const activeCount = Object.values(rooms).filter(r => r.phase !== 'waiting').length;
+  socket.emit('active_games', { count: activeCount });
   console.log('Connected:', socket.id);
 
   // ── Create room ──
@@ -770,6 +779,7 @@ io.on('connection', (socket) => {
         setTimeout(() => {
           if (rooms[gameCode] && rooms[gameCode].players.every(p => !p.connected)) {
             delete rooms[gameCode];
+            broadcastActiveGames();
           }
         }, 30 * 60 * 1000);
       }
