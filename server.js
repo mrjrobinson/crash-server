@@ -516,7 +516,7 @@ io.on('connection', (socket) => {
   // ── Host kicks a player from lobby ──
   socket.on('kick_player', ({ playerId }) => {
     const room = rooms[socket.data.roomCode];
-    if (!room || room.hostId !== socket.id || room.phase !== 'waiting') return;
+    if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
     const idx = room.players.findIndex(p => p.id === playerId && !p.isCpu);
     if (idx === -1) return;
     const kicked = room.players[idx];
