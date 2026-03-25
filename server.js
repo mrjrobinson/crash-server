@@ -24,6 +24,21 @@ app.get('/', (req, res) => {
 // ── Room state ──
 // rooms[code] = { code, players, state, phase, hostId }
 const rooms = {};
+const sbRooms = {}; // live scoreboard sessions
+
+// ── Scoreboard helpers ──
+function sbSummary(room) {
+  return {
+    code: room.code,
+    scorerId: room.scorerId,
+    players: room.players,
+    target: room.target,
+    stakePerPoint: room.stakePerPoint,
+    winnerId: room.winnerId,
+    dealerStartId: room.dealerStartId,
+    members: room.members.map(m => ({ id: m.id, name: m.name, connected: m.connected }))
+  };
+}
 
 // ── Game constants (mirrored from client) ──
 const SUITS = [
@@ -476,30 +491,177 @@ io.on('connection', (socket) => {
     dealCards(room);
   });
 
-  // ── Disconnect ──
-  socket.on('disconnect', () => {
-    const code = socket.data.roomCode;
-    const room = rooms[code];
-    if (!room) return;
-    const player = room.players.find(p => p.id === socket.id);
-    if (player) {
-      player.connected = false;
-      player.disconnectedAt = Date.now();
-      console.log(`${player.name} disconnected from room ${code}`);
-      io.to(code).emit('player_disconnected', { name: player.name, code });
-      io.to(code).emit('room_update', roomSummary(room));
+  // ══════════════════════════════════════
+  // LIVE SCOREBOARD HANDLERS
+  // ══════════════════════════════════════
+
+  socket.on('sb_create', ({ name, players, target, stakePerPoint }) => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code;
+    do { code = Array.from({length:4}, () => chars[Math.floor(Math.random()*chars.length)]).join(''); }
+    while (sbRooms[code]);
+    const member = { id: socket.id, name, connected: true };
+    sbRooms[code] = {
+      code, scorerId: socket.id,
+      players: players || [{id:1,name:'Player 1',score:0,active:true},{id:2,name:'Player 2',score:0,active:true},{id:3,name:'Player 3',score:0,active:true},{id:4,name:'Player 4',score:0,active:true}],
+      target: target || 11,
+      stakePerPoint: stakePerPoint || 0.10,
+      winnerId: null, dealerStartId: 1,
+      members: [member]
+    };
+    socket.join('sb_' + code);
+    socket.data.sbCode = code;
+    socket.emit('sb_created', { code });
+    io.to('sb_' + code).emit('sb_update', sbSummary(sbRooms[code]));
+    console.log(`SB room ${code} created by ${name}`);
+  });
+
+  socket.on('sb_join', ({ code, name }) => {
+    const room = sbRooms[code];
+    if (!room) { socket.emit('sb_error', { msg: 'Scoreboard not found. Check the code.' }); return; }
+    const existing = room.members.find(m => m.name === name);
+    if (existing) {
+      existing.id = socket.id; existing.connected = true;
+    } else {
+      room.members.push({ id: socket.id, name, connected: true });
     }
-    // Clean up empty rooms after 30 minutes
-    const allGone = room.players.every(p => !p.connected);
-    if (allGone) {
-      setTimeout(() => {
-        if (rooms[code] && rooms[code].players.every(p => !p.connected)) {
-          delete rooms[code];
-          console.log(`Room ${code} cleaned up`);
+    socket.join('sb_' + code);
+    socket.data.sbCode = code;
+    socket.emit('sb_joined', { code, isScorer: room.scorerId === socket.id });
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+    io.to('sb_' + code).emit('sb_member_joined', { name });
+    console.log(`${name} joined SB room ${code}`);
+  });
+
+  // Scorer updates a player score
+  socket.on('sb_score_change', ({ playerId, delta }) => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room || room.scorerId !== socket.id) return;
+    const player = room.players.find(p => p.id === playerId);
+    if (!player) return;
+    player.score = Math.max(0, player.score + delta);
+    // Check for winner
+    if (player.score >= room.target) {
+      player.score = room.target;
+      room.winnerId = playerId;
+    }
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+  });
+
+  // Scorer updates player name
+  socket.on('sb_name_change', ({ playerId, name }) => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room || room.scorerId !== socket.id) return;
+    const player = room.players.find(p => p.id === playerId);
+    if (player) { player.name = name; io.to('sb_' + code).emit('sb_update', sbSummary(room)); }
+  });
+
+  // Scorer starts new game
+  socket.on('sb_new_game', ({ dealerStartId }) => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room || room.scorerId !== socket.id) return;
+    room.players.forEach(p => { p.score = 0; });
+    room.winnerId = null;
+    room.dealerStartId = dealerStartId || room.players[0].id;
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+  });
+
+  // Scorer passes scorer role to another member
+  socket.on('sb_pass_scorer', ({ toName }) => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room || room.scorerId !== socket.id) return;
+    const member = room.members.find(m => m.name === toName && m.connected);
+    if (!member) { socket.emit('sb_error', { msg: `${toName} is not connected.` }); return; }
+    room.scorerId = member.id;
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+    io.to('sb_' + code).emit('sb_scorer_changed', { newScorerName: toName });
+  });
+
+  // Winner claims scorer role after winning
+  socket.on('sb_claim_scorer', () => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room) return;
+    room.scorerId = socket.id;
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+    const me = room.members.find(m => m.id === socket.id);
+    io.to('sb_' + code).emit('sb_scorer_changed', { newScorerName: me ? me.name : 'Someone' });
+  });
+
+  // Set player count (scorer only)
+  socket.on('sb_set_players', ({ count }) => {
+    const code = socket.data.sbCode;
+    const room = sbRooms[code];
+    if (!room || room.scorerId !== socket.id) return;
+    const current = room.players.filter(p => p.active).length;
+    if (count < current) {
+      let removed = 0;
+      for (let i = room.players.length - 1; i >= 0 && removed < current - count; i--) {
+        if (room.players[i].active) { room.players[i].active = false; removed++; }
+      }
+    } else {
+      for (let i = 0; i < room.players.length && room.players.filter(p=>p.active).length < count; i++) {
+        room.players[i].active = true;
+      }
+    }
+    io.to('sb_' + code).emit('sb_update', sbSummary(room));
+  });
+
+  // ── Disconnect from SB ──
+  socket.on('disconnect', () => {
+    const code = socket.data.sbCode;
+    if (code && sbRooms[code]) {
+      const room = sbRooms[code];
+      const member = room.members.find(m => m.id === socket.id);
+      if (member) {
+        member.connected = false;
+        // If scorer disconnected, auto-pass to next connected member
+        if (room.scorerId === socket.id) {
+          const next = room.members.find(m => m.connected && m.id !== socket.id);
+          if (next) {
+            room.scorerId = next.id;
+            io.to('sb_' + code).emit('sb_scorer_changed', { newScorerName: next.name, auto: true });
+          }
         }
-      }, 30 * 60 * 1000);
+        io.to('sb_' + code).emit('sb_update', sbSummary(room));
+      }
+      // Clean up empty SB rooms after 2 hours
+      if (room.members.every(m => !m.connected)) {
+        setTimeout(() => {
+          if (sbRooms[code] && sbRooms[code].members.every(m => !m.connected)) {
+            delete sbRooms[code];
+            console.log(`SB room ${code} cleaned up`);
+          }
+        }, 2 * 60 * 60 * 1000);
+      }
+    }
+    // Game room disconnect
+    const gameCode = socket.data.roomCode;
+    const gameRoom = rooms[gameCode];
+    if (gameRoom) {
+      const player = gameRoom.players.find(p => p.id === socket.id);
+      if (player) {
+        player.connected = false;
+        player.disconnectedAt = Date.now();
+        console.log(`${player.name} disconnected from room ${gameCode}`);
+        io.to(gameCode).emit('player_disconnected', { name: player.name, code: gameCode });
+        io.to(gameCode).emit('room_update', roomSummary(gameRoom));
+      }
+      if (gameRoom.players.every(p => !p.connected)) {
+        setTimeout(() => {
+          if (rooms[gameCode] && rooms[gameCode].players.every(p => !p.connected)) {
+            delete rooms[gameCode];
+          }
+        }, 30 * 60 * 1000);
+      }
     }
   });
+
+
 
   // ── Rejoin room after disconnect ──
   socket.on('rejoin_room', ({ code, name }) => {
