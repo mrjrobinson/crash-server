@@ -504,6 +504,21 @@ io.on('connection', (socket) => {
     console.log(`Room ${room.code}: ${player.name} submitted (${submittedCount}/${room.players.length})`);
   });
 
+  // ── Host kicks a player from lobby ──
+  socket.on('kick_player', ({ playerId }) => {
+    const room = rooms[socket.data.roomCode];
+    if (!room || room.hostId !== socket.id || room.phase !== 'waiting') return;
+    const idx = room.players.findIndex(p => p.id === playerId && !p.isCpu);
+    if (idx === -1) return;
+    const kicked = room.players[idx];
+    room.players.splice(idx, 1);
+    // Tell the kicked player
+    io.to(playerId).emit('kicked_from_room', { msg: 'You were removed from the lobby by the host.' });
+    // Update everyone else
+    io.to(room.code).emit('room_update', roomSummary(room));
+    console.log(`${kicked.name} kicked from room ${room.code}`);
+  });
+
   // ── Player ready for next game ──
   socket.on('player_ready', ({ ready }) => {
     const room = rooms[socket.data.roomCode];
