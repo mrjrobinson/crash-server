@@ -215,9 +215,10 @@ function playDeal(room) {
   for (let round = 0; round < 4; round++) {
     const result = scoreRound(room, round);
     let outcome = '';
+    const carryBefore = carry; // capture BEFORE modifying
     if (result.winner) {
       const wp = room.players.find(p => p.id === result.winner.playerId);
-      const gained = 1 + carry;
+      const gained = 1 + carryBefore;
       wp.score += gained;
       carry = 0;
       roundWinners.push(wp.name);
@@ -227,14 +228,14 @@ function playDeal(room) {
         gameWinner = wp;
         gameMsg = `${wp.name} reaches 11 — wins on round ${round+1} of deal ${room.currentDeal}!`;
         winningRound = round + 1;
-        roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore: carry, winningRound: true });
+        roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore, winningRound: true });
         break;
       }
     } else {
       carry += 1;
       outcome = `No winner — carry now ${carry}`;
     }
-    roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore: carry, winningRound: false });
+    roundResults.push({ round: round+1, played: result.played, winner: result.winner, outcome, carry, carryBefore, winningRound: false });
   }
 
   room.carryPoints = gameWinner ? 0 : carry;
@@ -483,11 +484,12 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.id === socket.id);
     if (player) {
       player.connected = false;
+      player.disconnectedAt = Date.now();
       console.log(`${player.name} disconnected from room ${code}`);
-      io.to(code).emit('player_disconnected', { name: player.name });
+      io.to(code).emit('player_disconnected', { name: player.name, code });
       io.to(code).emit('room_update', roomSummary(room));
     }
-    // Clean up empty rooms after 10 minutes
+    // Clean up empty rooms after 30 minutes
     const allGone = room.players.every(p => !p.connected);
     if (allGone) {
       setTimeout(() => {
@@ -495,26 +497,40 @@ io.on('connection', (socket) => {
           delete rooms[code];
           console.log(`Room ${code} cleaned up`);
         }
-      }, 10 * 60 * 1000);
+      }, 30 * 60 * 1000);
     }
   });
 
-  // ── Reconnect ──
+  // ── Rejoin room after disconnect ──
   socket.on('rejoin_room', ({ code, name }) => {
     const room = rooms[code];
-    if (!room) { socket.emit('error', { msg: 'Room no longer exists.' }); return; }
-    const player = room.players.find(p => p.name === name && !p.connected);
-    if (!player) { socket.emit('error', { msg: 'Could not find your player slot.' }); return; }
+    if (!room) { socket.emit('rejoin_failed', { msg: 'Room no longer exists. Ask the host to start a new game.' }); return; }
+    // Find their slot by name (disconnected or even still marked connected if they refreshed)
+    const player = room.players.find(p => p.name === name && !p.isCpu);
+    if (!player) { socket.emit('rejoin_failed', { msg: `Could not find a player named "${name}" in room ${code}.` }); return; }
+    // Update their socket id to the new connection
     player.id = socket.id;
     player.connected = true;
+    player.disconnectedAt = null;
     socket.join(code);
     socket.data.roomCode = code;
-    socket.emit('room_joined', { code, rejoin: true });
+    socket.emit('rejoin_success', {
+      code,
+      phase: room.phase,
+      isHost: room.hostId === player.id
+    });
     io.to(code).emit('room_update', roomSummary(room));
-    if (room.phase === 'building' && !player.submitted) {
-      socket.emit('your_cards', { dealCards: player.dealCards, dealNumber: room.currentDeal, carryPoints: room.carryPoints, fourOfAKindValue: player.fourOfAKindValue || null });
+    io.to(code).emit('player_rejoined', { name: player.name });
+    // Re-send their cards if mid-deal
+    if ((room.phase === 'building') && !player.submitted) {
+      socket.emit('your_cards', {
+        dealCards: player.dealCards,
+        dealNumber: room.currentDeal,
+        carryPoints: room.carryPoints,
+        fourOfAKindValue: player.fourOfAKindValue || null
+      });
     }
-    console.log(`${name} rejoined room ${code}`);
+    console.log(`${name} rejoined room ${code} (phase: ${room.phase})`);
   });
 });
 
