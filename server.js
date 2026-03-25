@@ -519,11 +519,18 @@ io.on('connection', (socket) => {
   socket.on('sb_join', ({ code, name }) => {
     const room = sbRooms[code];
     if (!room) { socket.emit('sb_error', { msg: 'Scoreboard not found. Check the code.' }); return; }
-    const existing = room.members.find(m => m.name === name);
-    if (existing) {
-      existing.id = socket.id; existing.connected = true;
+    // Add to members list
+    const existingMember = room.members.find(m => m.name === name);
+    if (existingMember) {
+      existingMember.id = socket.id; existingMember.connected = true;
     } else {
       room.members.push({ id: socket.id, name, connected: true });
+    }
+    // Also add as a player if not already in players list and space available
+    const existingPlayer = room.players.find(p => p.name === name);
+    if (!existingPlayer && room.players.filter(p => p.active).length < 4) {
+      const newId = Math.max(...room.players.map(p => p.id), 0) + 1;
+      room.players.push({ id: newId, name, score: 0, active: true });
     }
     socket.join('sb_' + code);
     socket.data.sbCode = code;
