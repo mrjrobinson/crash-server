@@ -504,6 +504,21 @@ io.on('connection', (socket) => {
     console.log(`Room ${room.code}: ${player.name} submitted (${submittedCount}/${room.players.length})`);
   });
 
+  // ── Player ready for next game ──
+  socket.on('player_ready', ({ ready }) => {
+    const room = rooms[socket.data.roomCode];
+    if (!room) return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player) return;
+    if (!room.readyMap) room.readyMap = {};
+    room.readyMap[player.name] = ready;
+    // Broadcast updated ready map to all players
+    io.to(room.code).emit('ready_update', { readyMap: room.readyMap });
+  });
+
+  // Reset readyMap when a new deal starts
+  // (handled in dealCards — reset there)
+
   // ── Celebrate selfie relay ──
   socket.on('celebrate_selfie', ({ name, image }) => {
     const room = rooms[socket.data.roomCode];
@@ -545,7 +560,8 @@ io.on('connection', (socket) => {
   // ── Host requests next deal ──
   socket.on('next_deal', () => {
     const room = rooms[socket.data.roomCode];
-    if (!room || room.hostId !== socket.id || room.phase !== 'between_deals') return;
+    if (!room || room.hostId !== socket.id) return;
+    room.readyMap = {}; // reset ready states for new game
     dealCards(room);
   });
 
