@@ -716,3 +716,61 @@ io.on('connection', (socket) => {
     }
     // Game room disconnect
     const gameCode = socket.data.roomCode;
+    const gameRoom = rooms[gameCode];
+    if (gameRoom) {
+      const player = gameRoom.players.find(p => p.id === socket.id);
+      if (player) {
+        player.connected = false;
+        player.disconnectedAt = Date.now();
+        console.log(`${player.name} disconnected from room ${gameCode}`);
+        io.to(gameCode).emit('player_disconnected', { name: player.name, code: gameCode });
+        io.to(gameCode).emit('room_update', roomSummary(gameRoom));
+      }
+      if (gameRoom.players.every(p => !p.connected)) {
+        setTimeout(() => {
+          if (rooms[gameCode] && rooms[gameCode].players.every(p => !p.connected)) {
+            delete rooms[gameCode];
+          }
+        }, 30 * 60 * 1000);
+      }
+    }
+  });
+
+
+
+  // ── Rejoin room after disconnect ──
+  socket.on('rejoin_room', ({ code, name }) => {
+    const room = rooms[code];
+    if (!room) { socket.emit('rejoin_failed', { msg: 'Room no longer exists. Ask the host to start a new game.' }); return; }
+    // Find their slot by name (disconnected or even still marked connected if they refreshed)
+    const player = room.players.find(p => p.name === name && !p.isCpu);
+    if (!player) { socket.emit('rejoin_failed', { msg: `Could not find a player named "${name}" in room ${code}.` }); return; }
+    // Update their socket id to the new connection
+    player.id = socket.id;
+    player.connected = true;
+    player.disconnectedAt = null;
+    socket.join(code);
+    socket.data.roomCode = code;
+    socket.emit('rejoin_success', {
+      code,
+      phase: room.phase,
+      isHost: room.hostId === player.id
+    });
+    io.to(code).emit('room_update', roomSummary(room));
+    io.to(code).emit('player_rejoined', { name: player.name });
+    // Re-send their cards if mid-deal
+    if ((room.phase === 'building') && !player.submitted) {
+      socket.emit('your_cards', {
+        dealCards: player.dealCards,
+        dealNumber: room.currentDeal,
+        carryPoints: room.carryPoints,
+        fourOfAKindValue: player.fourOfAKindValue || null
+      });
+    }
+    console.log(`${name} rejoined room ${code} (phase: ${room.phase})`);
+  });
+});
+
+// ── Start ──
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Crash server running on port ${PORT}`));
