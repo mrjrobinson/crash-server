@@ -319,7 +319,7 @@ function cpuOptimise(cards) {
 
 function scoreAndBroadcast(room) {
   // Clear any pending auto-submit timer
-  if (room.autoSubmitTimer) { clearInterval(room.autoSubmitTimer); room.autoSubmitTimer = null; }
+  if (room.autoSubmitTimerHandle) { clearInterval(room.autoSubmitTimerHandle); room.autoSubmitTimerHandle = null; }
   room.phase = 'revealing';
   const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
   io.to(room.code).emit('room_update', roomSummary(room));
@@ -362,7 +362,7 @@ io.on('connection', (socket) => {
     const code = generateCode();
     const player = { id: socket.id, name: name || 'Player 1', score: 0, ready: false, submitted: false, connected: true, hands: [[],[],[],[]], dealCards: [] };
     rooms[code] = {
-      code, hostId: socket.id, phase: 'lobby',
+      code, hostId: socket.id, phase: 'lobby', autoSubmitTimer: true,
       players: [player],
       currentDeal: 1, carryPoints: 0, gameOver: false
     };
@@ -389,7 +389,7 @@ io.on('connection', (socket) => {
   });
 
   // ── Host starts game ──
-  socket.on('start_game', ({ cpuCount = 0 } = {}) => {
+  socket.on('start_game', ({ cpuCount = 0, autoSubmitTimer = true } = {}) => {
     const room = rooms[socket.data.roomCode];
     if (!room || room.hostId !== socket.id) return;
     const humanCount = room.players.length;
@@ -412,6 +412,7 @@ io.on('connection', (socket) => {
   function dealCards(room) {
     const deck = shuffle(createDeck());
     let ptr = 0;
+    room.autoSubmitTimer = autoSubmitTimer;
     room.phase = 'building';
     broadcastActiveGames();
     room.players.forEach(p => {
@@ -530,23 +531,23 @@ io.on('connection', (socket) => {
 
     // If all submitted, score the deal
     if (room.players.every(p => p.submitted)) {
-      if (room.autoSubmitTimer) { clearTimeout(room.autoSubmitTimer); room.autoSubmitTimer = null; }
+      if (room.autoSubmitTimerHandle) { clearInterval(room.autoSubmitTimerHandle); room.autoSubmitTimerHandle = null; }
       scoreAndBroadcast(room);
       return;
     }
 
     // If only 1 human player left to submit, start 20s countdown
     const humanRemaining = room.players.filter(p => !p.isCpu && !p.submitted);
-    if (humanRemaining.length === 1 && !room.autoSubmitTimer) {
+    if (humanRemaining.length === 1 && room.autoSubmitTimer && !room.autoSubmitTimerHandle) {
       let secondsLeft = 20;
       const lastPlayerName = humanRemaining[0].name;
       io.to(room.code).emit('auto_submit_countdown', { seconds: secondsLeft, playerName: lastPlayerName });
-      room.autoSubmitTimer = setInterval(() => {
+      room.autoSubmitTimerHandle = setInterval(() => {
         secondsLeft--;
         io.to(room.code).emit('auto_submit_countdown', { seconds: secondsLeft, playerName: lastPlayerName });
         if (secondsLeft <= 0) {
-          clearInterval(room.autoSubmitTimer);
-          room.autoSubmitTimer = null;
+          clearInterval(room.autoSubmitTimerHandle);
+          room.autoSubmitTimerHandle = null;
           const lastPlayer = room.players.find(p => p.name === lastPlayerName);
           if (!lastPlayer.submitted) {
             // Auto-submit with whatever hands they have
