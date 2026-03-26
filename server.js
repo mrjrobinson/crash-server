@@ -394,17 +394,17 @@ io.on('connection', (socket) => {
     if (!room || room.hostId !== socket.id) return;
     const humanCount = room.players.length;
     if (humanCount < 1) { socket.emit('error', { msg: 'Need at least 1 player to start.' }); return; }
-    const totalNeeded = Math.min(cpuCount, 4 - humanCount);
-    // Add CPU players to fill slots
-    for (let i = 0; i < totalNeeded; i++) {
+    // Fill remaining slots with CPUs automatically
+    const cpuToAdd = 4 - humanCount;
+    for (let i = 0; i < cpuToAdd; i++) {
+      const cpuNum = i + 1;
       room.players.push({
-        id: `cpu_${i+1}`,
-        name: `CPU ${i+1}`,
+        id: `cpu_${cpuNum}`,
+        name: `CPU ${cpuNum}`,
         score: 0, ready: true, submitted: false, connected: true,
         hands: [[],[],[],[]], dealCards: [], isCpu: true
       });
     }
-    if (room.players.length < 2) { socket.emit('error', { msg: 'Need at least 2 players to start.' }); return; }
     room.autoSubmitTimer = autoSubmitTimer;
     dealCards(room);
   });
@@ -501,6 +501,17 @@ io.on('connection', (socket) => {
     if (new Set(usedIds).size !== usedIds.length) {
       socket.emit('error', { msg: 'A card appears in more than one hand.' }); return;
     }
+    if (hands.some(h => h.length === 1)) {
+      socket.emit('error', { msg: 'Each hand needs at least 2 cards.' }); return;
+    }
+    if (hands.some(h => {
+      if (h.length !== 2) return false;
+      const counts = {};
+      h.forEach(c => counts[c.value] = (counts[c.value]||0)+1);
+      return !Object.values(counts).some(n => n === 2);
+    })) {
+      socket.emit('error', { msg: 'A 2-card hand must be a Pair (two cards of the same value).' }); return;
+    }
     if (!handsInOrder(hands)) {
       socket.emit('error', { msg: 'Hands must go strongest to weakest: Prial → On the Bounce → Run → Flush → Pair' }); return;
     }
@@ -550,13 +561,14 @@ io.on('connection', (socket) => {
           room.autoSubmitTimerHandle = null;
           const lastPlayer = room.players.find(p => p.name === lastPlayerName);
           if (!lastPlayer.submitted) {
-            // Auto-submit with whatever hands they have
-            lastPlayer.hands = lastPlayer.hands && lastPlayer.hands.length === 4
+            // Auto-submit with whatever hands they have built so far
+            lastPlayer.hands = (lastPlayer.hands && lastPlayer.hands.length === 4)
               ? lastPlayer.hands : [[], [], [], []];
             lastPlayer.submitted = true;
+            const allHumans = room.players.filter(p => !p.isCpu);
             io.to(room.code).emit('submission_update', {
               submittedCount: room.players.filter(p => p.submitted).length,
-              totalPlayers: humanPlayers.length,
+              totalPlayers: allHumans.length,
               submittedNames: room.players.filter(p => p.submitted).map(p => p.name)
             });
             scoreAndBroadcast(room);
