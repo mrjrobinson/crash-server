@@ -395,11 +395,13 @@ io.on('connection', (socket) => {
     const humanCount = room.players.length;
     if (humanCount < 1) { socket.emit('error', { msg: 'Need at least 1 player to start.' }); return; }
     // Fill remaining slots with CPUs automatically
-    const cpuToAdd = 4 - humanCount;
-    for (let i = 0; i < cpuToAdd; i++) {
-      const cpuNum = i + 1;
+    const slotsToFill = 4 - room.players.length;
+    for (let i = 0; i < slotsToFill; i++) {
+      // Find next available CPU number not already in use
+      let cpuNum = 1;
+      while (room.players.some(p => p.name === `CPU ${cpuNum}`)) cpuNum++;
       room.players.push({
-        id: `cpu_${cpuNum}`,
+        id: `cpu_${cpuNum}_${Date.now()}_${i}`,
         name: `CPU ${cpuNum}`,
         score: 0, ready: true, submitted: false, connected: true,
         hands: [[],[],[],[]], dealCards: [], isCpu: true
@@ -512,6 +514,12 @@ io.on('connection', (socket) => {
     })) {
       socket.emit('error', { msg: 'A 2-card hand must be a Pair (two cards of the same value).' }); return;
     }
+    // Check for gaps — filled hands must be consecutive from H1
+    let gapFound = false;
+    for (let i = 0; i < hands.length; i++) {
+      if (!hands[i].length) gapFound = true;
+      else if (gapFound) { socket.emit('error', { msg: 'Hands must be filled in order from H1.' }); return; }
+    }
     if (!handsInOrder(hands)) {
       socket.emit('error', { msg: 'Hands must go strongest to weakest: Prial → On the Bounce → Run → Flush → Pair' }); return;
     }
@@ -562,8 +570,27 @@ io.on('connection', (socket) => {
           const lastPlayer = room.players.find(p => p.name === lastPlayerName);
           if (!lastPlayer.submitted) {
             // Auto-submit with whatever hands they have built so far
-            lastPlayer.hands = (lastPlayer.hands && lastPlayer.hands.length === 4)
-              ? lastPlayer.hands : [[], [], [], []];
+            // Validate auto-submitted hands — remove any single-card hands
+            if (lastPlayer.hands && lastPlayer.hands.length === 4) {
+              lastPlayer.hands = lastPlayer.hands.map(h => {
+                if (h.length === 0) return h; // empty ok
+                if (h.length === 1) return []; // single card - clear it
+                if (h.length === 2) {
+                  // Check it's a valid pair
+                  const counts = {};
+                  h.forEach(c => counts[c.value] = (counts[c.value]||0)+1);
+                  if (!Object.values(counts).some(n => n === 2)) return []; // not a pair - clear it
+                }
+                return h;
+              });
+              // Fix gaps after clearing invalid hands
+              const filled = lastPlayer.hands.filter(h => h.length > 0);
+              const empty = lastPlayer.hands.filter(h => h.length === 0);
+              lastPlayer.hands = [...filled, ...empty];
+              while (lastPlayer.hands.length < 4) lastPlayer.hands.push([]);
+            } else {
+              lastPlayer.hands = [[], [], [], []];
+            }
             lastPlayer.submitted = true;
             const allHumans = room.players.filter(p => !p.isCpu);
             io.to(room.code).emit('submission_update', {
