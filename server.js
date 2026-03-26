@@ -318,6 +318,8 @@ function cpuOptimise(cards) {
 }
 
 function scoreAndBroadcast(room) {
+  // Clear any pending auto-submit timer
+  if (room.autoSubmitTimer) { clearInterval(room.autoSubmitTimer); room.autoSubmitTimer = null; }
   room.phase = 'revealing';
   const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
   io.to(room.code).emit('room_update', roomSummary(room));
@@ -528,7 +530,38 @@ io.on('connection', (socket) => {
 
     // If all submitted, score the deal
     if (room.players.every(p => p.submitted)) {
+      if (room.autoSubmitTimer) { clearTimeout(room.autoSubmitTimer); room.autoSubmitTimer = null; }
       scoreAndBroadcast(room);
+      return;
+    }
+
+    // If only 1 human player left to submit, start 20s countdown
+    const humanRemaining = room.players.filter(p => !p.isCpu && !p.submitted);
+    if (humanRemaining.length === 1 && !room.autoSubmitTimer) {
+      let secondsLeft = 20;
+      const lastPlayerName = humanRemaining[0].name;
+      io.to(room.code).emit('auto_submit_countdown', { seconds: secondsLeft, playerName: lastPlayerName });
+      room.autoSubmitTimer = setInterval(() => {
+        secondsLeft--;
+        io.to(room.code).emit('auto_submit_countdown', { seconds: secondsLeft, playerName: lastPlayerName });
+        if (secondsLeft <= 0) {
+          clearInterval(room.autoSubmitTimer);
+          room.autoSubmitTimer = null;
+          const lastPlayer = room.players.find(p => p.name === lastPlayerName);
+          if (!lastPlayer.submitted) {
+            // Auto-submit with whatever hands they have
+            lastPlayer.hands = lastPlayer.hands && lastPlayer.hands.length === 4
+              ? lastPlayer.hands : [[], [], [], []];
+            lastPlayer.submitted = true;
+            io.to(room.code).emit('submission_update', {
+              submittedCount: room.players.filter(p => p.submitted).length,
+              totalPlayers: humanPlayers.length,
+              submittedNames: room.players.filter(p => p.submitted).map(p => p.name)
+            });
+            scoreAndBroadcast(room);
+          }
+        }
+      }, 1000);
     }
 
     console.log(`Room ${room.code}: ${player.name} submitted (${submittedCount}/${room.players.length})`);
