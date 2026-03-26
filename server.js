@@ -640,7 +640,19 @@ io.on('connection', (socket) => {
   socket.on('next_deal', () => {
     const room = rooms[socket.data.roomCode];
     if (!room || room.hostId !== socket.id) return;
-    room.readyMap = {}; // reset ready states for new game
+    room.readyMap = {}; // reset ready states
+    // If game was over, reset scores and state for a brand new game
+    if (room.gameOver) {
+      room.players.forEach(p => {
+        p.score = 0;
+        p.submitted = false;
+        p.bonusApplied = false;
+        p.fourOfAKindValue = null;
+      });
+      room.gameOver = false;
+      room.carryPoints = 0;
+      room.currentDeal = 1;
+    }
     dealCards(room);
   });
 
