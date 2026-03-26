@@ -26,7 +26,11 @@ app.get('/', (req, res) => {
 const rooms = {};
 
 function broadcastActiveGames() {
-  const count = Object.values(rooms).filter(r => r.phase !== 'waiting').length;
+  // Count rooms where a game is actively in progress (not just in the lobby)
+  const count = Object.values(rooms).filter(r =>
+    r.phase === 'building' || r.phase === 'revealing' ||
+    r.phase === 'between_deals' || r.phase === 'six_pairs'
+  ).length;
   io.emit('active_games', { count });
 }
 const sbRooms = {}; // live scoreboard sessions
@@ -344,7 +348,10 @@ function scoreAndBroadcast(room) {
 // ── Socket.io logic ──
 io.on('connection', (socket) => {
   // Send current active game count to newly connected client
-  const activeCount = Object.values(rooms).filter(r => r.phase !== 'waiting').length;
+  const activeCount = Object.values(rooms).filter(r =>
+    r.phase === 'building' || r.phase === 'revealing' ||
+    r.phase === 'between_deals' || r.phase === 'six_pairs'
+  ).length;
   socket.emit('active_games', { count: activeCount });
   console.log('Connected:', socket.id);
 
@@ -404,6 +411,7 @@ io.on('connection', (socket) => {
     const deck = shuffle(createDeck());
     let ptr = 0;
     room.phase = 'building';
+    broadcastActiveGames();
     room.players.forEach(p => {
       p.dealCards = sortCards(deck.slice(ptr, ptr + 13));
       ptr += 13;
@@ -787,6 +795,32 @@ io.on('connection', (socket) => {
         console.log(`${player.name} disconnected from room ${gameCode}`);
         io.to(gameCode).emit('player_disconnected', { name: player.name, code: gameCode });
         io.to(gameCode).emit('room_update', roomSummary(gameRoom));
+
+        // If disconnected player was the host, schedule host transfer after 30s
+        if (gameRoom.hostId === socket.id) {
+          setTimeout(() => {
+            const room = rooms[gameCode];
+            if (!room) return;
+            // Check if original host is still disconnected
+            const host = room.players.find(p => p.id === socket.id);
+            if (host && !host.connected) {
+              // Find next connected human player to become host
+              const nextHost = room.players.find(p => p.connected && !p.isCpu && p.id !== socket.id);
+              if (nextHost) {
+                room.hostId = nextHost.id;
+                io.to(gameCode).emit('host_transferred', { name: nextHost.name });
+                io.to(gameCode).emit('room_update', roomSummary(room));
+                console.log(`Host transferred to ${nextHost.name} in room ${gameCode}`);
+              } else {
+                // No connected human players — end the game
+                io.to(gameCode).emit('game_ended', { msg: 'Game ended — all human players disconnected.' });
+                delete rooms[gameCode];
+                broadcastActiveGames();
+                console.log(`Room ${gameCode} ended — no human players remaining`);
+              }
+            }
+          }, 30 * 1000); // 30 seconds
+        }
       }
       if (gameRoom.players.every(p => !p.connected)) {
         setTimeout(() => {
