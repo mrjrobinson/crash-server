@@ -809,15 +809,18 @@ io.on('connection', (socket) => {
     const player = room.players.find(p => p.name === name && !p.isCpu);
     if (!player) { socket.emit('rejoin_failed', { msg: `Could not find a player named "${name}" in room ${code}.` }); return; }
     // Update their socket id to the new connection
+    const wasHost = room.hostId === player.id;
     player.id = socket.id;
     player.connected = true;
     player.disconnectedAt = null;
+    // If this player was the host, update hostId to their new socket
+    if (wasHost) room.hostId = socket.id;
     socket.join(code);
     socket.data.roomCode = code;
     socket.emit('rejoin_success', {
       code,
       phase: room.phase,
-      isHost: room.hostId === player.id
+      isHost: wasHost
     });
     io.to(code).emit('room_update', roomSummary(room));
     io.to(code).emit('player_rejoined', { name: player.name });
@@ -834,6 +837,3 @@ io.on('connection', (socket) => {
   });
 });
 
-// ── Start ──
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Crash server running on port ${PORT}`));
