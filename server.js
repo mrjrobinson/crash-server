@@ -405,6 +405,7 @@ io.on('connection', (socket) => {
       });
     }
     if (room.players.length < 2) { socket.emit('error', { msg: 'Need at least 2 players to start.' }); return; }
+    room.autoSubmitTimer = autoSubmitTimer;
     dealCards(room);
   });
 
@@ -412,7 +413,6 @@ io.on('connection', (socket) => {
   function dealCards(room) {
     const deck = shuffle(createDeck());
     let ptr = 0;
-    room.autoSubmitTimer = autoSubmitTimer;
     room.phase = 'building';
     broadcastActiveGames();
     room.players.forEach(p => {
