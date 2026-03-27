@@ -210,7 +210,7 @@ function scoreRound(room, roundIndex) {
   const played = room.players.map(player => {
     const cards = (player.hands || [])[roundIndex] || [];
     const ev = evaluateHand(cards);
-    return { playerId: player.id, player: player.name, cards, eval: ev, status: ev ? 'played' : 'ignored' };
+    return { playerId: player.id, player: player.name, cards, eval: ev, status: ev ? 'played' : 'ignored', fourOfAKindValue: player.fourOfAKindValue || null, bonusApplied: player.bonusApplied || false };
   });
   let remaining = played.filter(p => p.eval).slice();
   let winner = null;
