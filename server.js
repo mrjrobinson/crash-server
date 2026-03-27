@@ -475,7 +475,8 @@ io.on('connection', (socket) => {
       // Notify just that player — others get a "waiting" message
       io.to(sixPairsPlayer.id).emit('six_pairs_choice', {
         pairCount: countPairs(sixPairsPlayer.dealCards),
-        dealNumber: room.currentDeal
+        dealNumber: room.currentDeal,
+        dealCards: sixPairsPlayer.dealCards
       });
       io.to(room.code).emit('six_pairs_pending', { playerName: sixPairsPlayer.name });
       room.phase = 'six_pairs'; // pause dealing until choice is made
