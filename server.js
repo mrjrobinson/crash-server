@@ -532,11 +532,16 @@ io.on('connection', (socket) => {
     })) {
       socket.emit('error', { msg: 'A 2-card hand must be a Pair (two cards of the same value).' }); return;
     }
-    // Check for gaps — filled hands must be consecutive from H1
+    // Check for gaps — valid hands must be consecutive from H1
+    // A no-hand (cards that don't form a valid hand) counts as a gap too
     let gapFound = false;
     for (let i = 0; i < hands.length; i++) {
-      if (!hands[i].length) gapFound = true;
-      else if (gapFound) { socket.emit('error', { msg: 'Hands must be filled in order from H1.' }); return; }
+      const hasCards = hands[i].length > 0;
+      const isValid = hasCards && !!evaluateHand(hands[i]);
+      const isEmpty = !hasCards;
+      const isNoHand = hasCards && !isValid;
+      if (isEmpty || isNoHand) gapFound = true;
+      else if (gapFound) { socket.emit('error', { msg: 'Hands must be filled in order from H1 — you cannot have a valid hand after a No Hand or empty slot.' }); return; }
     }
     if (!handsInOrder(hands)) {
       socket.emit('error', { msg: 'Hands must go strongest to weakest: Prial → On the Bounce → Run → Flush → Pair' }); return;
