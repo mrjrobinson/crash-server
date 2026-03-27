@@ -200,7 +200,9 @@ function roomSummary(room) {
     })),
     currentDeal: room.currentDeal,
     carryPoints: room.carryPoints,
-    hostId: room.hostId
+    hostId: room.hostId,
+    moneyGame: room.moneyGame || false,
+    ledger: room.ledger || {}
   };
 }
 
@@ -362,7 +364,7 @@ io.on('connection', (socket) => {
     const code = generateCode();
     const player = { id: socket.id, name: name || 'Player 1', score: 0, ready: false, submitted: false, connected: true, hands: [[],[],[],[]], dealCards: [] };
     rooms[code] = {
-      code, hostId: socket.id, phase: 'lobby', autoSubmitTimer: true,
+      code, hostId: socket.id, phase: 'lobby', autoSubmitTimer: true, moneyGame: true, ledger: {},
       players: [player],
       currentDeal: 1, carryPoints: 0, gameOver: false
     };
@@ -408,7 +410,7 @@ io.on('connection', (socket) => {
       });
     }
     room.autoSubmitTimer = autoSubmitTimer;
-    dealCards(room);
+    dealCards(room); // moneyGame setting preserved from lobby toggle
   });
 
   // ── Deal cards ──
@@ -676,6 +678,22 @@ io.on('connection', (socket) => {
   });
 
   // ── Host requests next deal ──
+  socket.on('set_money_game', ({ moneyGame }) => {
+    const room = rooms[socket.data.roomCode];
+    if (!room || room.hostId !== socket.id) return;
+    room.moneyGame = moneyGame;
+    if (!moneyGame) room.ledger = {}; // clear ledger if turning off
+    io.to(room.code).emit('room_update', roomSummary(room));
+  });
+
+  socket.on('update_ledger', ({ ledger }) => {
+    const room = rooms[socket.data.roomCode];
+    if (!room) return;
+    room.ledger = ledger;
+    // Broadcast updated ledger to all players
+    io.to(room.code).emit('ledger_update', { ledger });
+  });
+
   socket.on('next_deal', () => {
     const room = rooms[socket.data.roomCode];
     if (!room || room.hostId !== socket.id) return;
@@ -939,7 +957,9 @@ io.on('connection', (socket) => {
     socket.emit('rejoin_success', {
       code,
       phase: room.phase,
-      isHost: wasHost
+      isHost: wasHost,
+      moneyGame: room.moneyGame || false,
+      ledger: room.ledger || {}
     });
     io.to(code).emit('room_update', roomSummary(room));
     io.to(code).emit('player_rejoined', { name: player.name });
