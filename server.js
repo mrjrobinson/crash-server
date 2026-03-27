@@ -346,7 +346,7 @@ function scoreAndBroadcast(room) {
     roundResults, gameWinner: gameWinner ? { id: gameWinner.id, name: gameWinner.name, score: gameWinner.score } : null,
     gameMsg, winningRound,
     scores: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
-    allHands: room.players.map(p => ({ id: p.id, name: p.name, hands: p.hands }))
+    allHands: room.players.map(p => ({ id: p.id, name: p.name, hands: p.hands, fourOfAKindValue: p.fourOfAKindValue || null, bonusApplied: p.bonusApplied || false }))
   });
   room.phase = room.gameOver ? 'gameover' : 'between_deals';
   if (!room.gameOver) room.currentDeal += 1;
