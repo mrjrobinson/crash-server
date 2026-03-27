@@ -306,6 +306,9 @@ function cpuOptimise(cards) {
   const scored = [...combos(idxs,3), ...combos(idxs,2)].map(combo => {
     const hand = combo.map(i => cards[i]);
     const ev = evaluateHand(hand);
+    // If a 3-card hand only evaluates as a Pair, don't use it —
+    // prefer the 2-card pair so the spare card can be used elsewhere
+    if(ev && ev.kind === 'Pair' && combo.length === 3) return { combo, hand, ev, score: -1 };
     return { combo, hand, ev, score: ev ? ev.rankGroup*10000 - ev.rankingIndex : -1 };
   }).filter(x => x.score >= 0).sort((a,b) => b.score - a.score);
   const used = new Set(), picked = [];
