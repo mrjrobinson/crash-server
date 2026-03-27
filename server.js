@@ -382,8 +382,21 @@ io.on('connection', (socket) => {
   socket.on('join_room', ({ code, name }) => {
     const room = rooms[code];
     if (!room) { socket.emit('error', { msg: 'Room not found. Check your code.' }); return; }
-    if (room.players.length >= 4) { socket.emit('error', { msg: 'Room is full (4 players max).' }); return; }
     if (room.phase !== 'lobby') { socket.emit('error', { msg: 'Game already in progress.' }); return; }
+    // If player with same name already exists in lobby, treat as a rejoin (avoid duplicates)
+    const existing = room.players.find(p => p.name === name && !p.isCpu);
+    if (existing) {
+      existing.id = socket.id;
+      existing.connected = true;
+      existing.disconnectedAt = null;
+      socket.join(code);
+      socket.data.roomCode = code;
+      socket.emit('room_joined', { code, rejoin: true });
+      io.to(code).emit('room_update', roomSummary(room));
+      console.log(`${name} re-joined lobby ${code} (duplicate prevented)`);
+      return;
+    }
+    if (room.players.length >= 4) { socket.emit('error', { msg: 'Room is full (4 players max).' }); return; }
     const player = { id: socket.id, name: name || `Player ${room.players.length + 1}`, score: 0, ready: false, submitted: false, connected: true, hands: [[],[],[],[]], dealCards: [] };
     room.players.push(player);
     socket.join(code);
@@ -962,17 +975,31 @@ io.on('connection', (socket) => {
       phase: room.phase,
       isHost: wasHost,
       moneyGame: room.moneyGame || false,
-      ledger: room.ledger || {}
+      ledger: room.ledger || {},
+      submitted: player.submitted || false,
+      hands: player.hands || [[],[],[],[]],
+      scores: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
+      players: roomSummary(room).players
     });
     io.to(code).emit('room_update', roomSummary(room));
     io.to(code).emit('player_rejoined', { name: player.name });
-    // Re-send their cards if mid-deal
-    if ((room.phase === 'building') && !player.submitted) {
+    // Re-send their cards if mid-deal and not yet submitted
+    if (room.phase === 'building' && !player.submitted) {
       socket.emit('your_cards', {
         dealCards: player.dealCards,
         dealNumber: room.currentDeal,
         carryPoints: room.carryPoints,
         fourOfAKindValue: player.fourOfAKindValue || null
+      });
+    }
+    // If they already submitted, send them to waiting screen
+    if (room.phase === 'building' && player.submitted) {
+      const humanPlayers = room.players.filter(p => !p.isCpu);
+      const submittedCount = room.players.filter(p => p.submitted).length;
+      socket.emit('submission_update', {
+        submittedCount,
+        totalPlayers: humanPlayers.length,
+        submittedNames: room.players.filter(p => p.submitted).map(p => p.name)
       });
     }
     console.log(`${name} rejoined room ${code} (phase: ${room.phase})`);
