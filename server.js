@@ -8,6 +8,15 @@ const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
+// ── Global error handlers — prevent server crashing on unhandled errors ──
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err.message, err.stack);
+  // Don't exit — keep the server alive
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 // ── Serve a simple status page ──
 app.get('/', (req, res) => {
   res.send(`
@@ -20,6 +29,9 @@ app.get('/', (req, res) => {
     </div></body></html>
   `);
 });
+
+// ── Ping endpoint for keep-alive ──
+app.get('/ping', (req, res) => res.json({ ok: true, uptime: Math.floor(process.uptime()), rooms: Object.keys(rooms).length }));
 
 // ── Room state ──
 // rooms[code] = { code, players, state, phase, hostId }
@@ -1011,6 +1023,38 @@ io.on('connection', (socket) => {
     console.log(`${name} rejoined room ${code} (phase: ${room.phase})`);
   });
 });
+
+// ── Periodic stale room cleanup (every 30 minutes) ──
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  Object.entries(rooms).forEach(([code, room]) => {
+    // Remove lobby rooms older than 2 hours with no connected players
+    const allDisconnected = room.players.every(p => !p.connected);
+    const isStale = room.phase === 'lobby' || room.phase === 'gameover';
+    // Also remove any room where all players have been disconnected for over 1 hour
+    const longestDisconnect = Math.max(0, ...room.players
+      .filter(p => !p.connected && p.disconnectedAt)
+      .map(p => now - p.disconnectedAt));
+    if (allDisconnected && longestDisconnect > 60 * 60 * 1000) {
+      delete rooms[code];
+      cleaned++;
+    }
+  });
+  if (cleaned > 0) {
+    console.log(`[cleanup] Removed ${cleaned} stale room(s). Active rooms: ${Object.keys(rooms).length}`);
+    broadcastActiveGames();
+  }
+}, 30 * 60 * 1000);
+
+// ── Keep-alive self-ping (prevents Render free tier spin-down) ──
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
+setInterval(() => {
+  fetch(`${SELF_URL}/ping`)
+    .then(r => r.json())
+    .then(d => console.log(`[keepalive] ping ok — uptime ${d.uptime}s, rooms ${d.rooms}`))
+    .catch(e => console.warn('[keepalive] ping failed:', e.message));
+}, 10 * 60 * 1000); // every 10 minutes
 
 // ── Start ──
 const PORT = process.env.PORT || 3000;
