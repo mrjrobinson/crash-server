@@ -4,6 +4,13 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// Allow cross-origin requests from any domain (needed for fetch from game site)
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  next();
+});
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
