@@ -31,7 +31,13 @@ app.get('/', (req, res) => {
 });
 
 // ── Ping endpoint for keep-alive ──
-app.get('/ping', (req, res) => res.json({ ok: true, uptime: Math.floor(process.uptime()), rooms: Object.keys(rooms).length }));
+app.get('/ping', (req, res) => {
+  const activeRooms = Object.values(rooms).filter(r =>
+    r.phase === 'building' || r.phase === 'revealing' ||
+    r.phase === 'between_deals' || r.phase === 'six_pairs'
+  ).length;
+  res.json({ ok: true, uptime: Math.floor(process.uptime()), rooms: activeRooms });
+});
 
 // ── Room state ──
 // rooms[code] = { code, players, state, phase, hostId }
