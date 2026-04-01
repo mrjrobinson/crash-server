@@ -338,6 +338,9 @@ function scoreAndBroadcast(room) {
   // Clear any pending auto-submit timer
   if (room.autoSubmitTimerHandle) { clearInterval(room.autoSubmitTimerHandle); room.autoSubmitTimerHandle = null; }
   room.phase = 'revealing';
+  // Capture scores BEFORE this deal's points are added
+  const preDealScores = {};
+  room.players.forEach(p => preDealScores[p.id] = p.score);
   const { roundResults, gameWinner, gameMsg, winningRound } = playDeal(room);
   io.to(room.code).emit('room_update', roomSummary(room));
   broadcastActiveGames(); // update active count
@@ -358,6 +361,7 @@ function scoreAndBroadcast(room) {
     roundResults, gameWinner: gameWinner ? { id: gameWinner.id, name: gameWinner.name, score: gameWinner.score } : null,
     gameMsg, winningRound,
     scores: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
+    preDealScores,
     allHands: room.players.map(p => ({ id: p.id, name: p.name, hands: p.hands, fourOfAKindValue: p.fourOfAKindValue || null, bonusApplied: p.bonusApplied || false }))
   });
   room.phase = room.gameOver ? 'gameover' : 'between_deals';
@@ -997,6 +1001,7 @@ io.on('connection', (socket) => {
       submitted: player.submitted || false,
       hands: player.hands || [[],[],[],[]],
       scores: room.players.map(p => ({ id: p.id, name: p.name, score: p.score })),
+    preDealScores,
       players: roomSummary(room).players
     });
     io.to(code).emit('room_update', roomSummary(room));
